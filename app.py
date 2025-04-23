@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from utils.text_extraction import get_clipboard_text, get_text_from_image, get_text_from_url
 from utils.place_extraction import (extract_places_with_spacy, extract_places_with_gemini, 
                                     combine_place_extractions)
-from utils.map_handler import (geocode_places, create_folium_map, get_route,
+from utils.map_handler import (geocode_places, create_folium_map, create_google_maps_html, get_route,
                               save_map_data, load_map_data, get_saved_maps)
 from streamlit_folium import folium_static
 import base64
@@ -32,6 +32,8 @@ if "route_data" not in st.session_state:
     st.session_state.route_data = None
 if "selected_places" not in st.session_state:
     st.session_state.selected_places = []
+if "map_view" not in st.session_state:
+    st.session_state.map_view = "folium"
 
 def update_place_note(place_index, note, sentiment):
     """Update note and sentiment for a place"""
@@ -175,6 +177,20 @@ def map_view_section():
     """Section for map visualization and saving/loading maps"""
     st.subheader("Map View")
     
+    # Map type selection
+    map_type_col1, map_type_col2 = st.columns([1, 3])
+    with map_type_col1:
+        map_view = st.radio("Map Type:", 
+                          ["Folium (Basic)", "Google Maps (Full)"],
+                          index=0 if st.session_state.map_view == "folium" else 1)
+        st.session_state.map_view = "folium" if map_view == "Folium (Basic)" else "google"
+    
+    with map_type_col2:
+        if st.session_state.map_view == "google":
+            google_map_type = st.radio("Google Maps Type:",
+                                     ["roadmap", "satellite", "hybrid", "terrain"],
+                                     horizontal=True)
+    
     # Map operations
     col1, col2 = st.columns(2)
     
@@ -228,19 +244,43 @@ def map_view_section():
     # Display the map
     st.subheader("Map")
     if st.session_state.geocoded_places:
-        # Create and display the map
-        m = create_folium_map(st.session_state.geocoded_places, 
-                             st.session_state.selected_places,
-                             st.session_state.route_data)
-        folium_static(m)
-        
-        # Add download link for the map
-        st.download_button(
-            label="Download Map as HTML",
-            data=m.get_root().render(),
-            file_name="map.html",
-            mime="text/html"
-        )
+        if st.session_state.map_view == "folium":
+            # Create and display Folium map
+            m = create_folium_map(st.session_state.geocoded_places, 
+                                 st.session_state.selected_places,
+                                 st.session_state.route_data)
+            folium_static(m)
+            
+            # Add download link for the map
+            st.download_button(
+                label="Download Map as HTML",
+                data=m.get_root().render(),
+                file_name="map.html",
+                mime="text/html"
+            )
+        else:
+            # Google Maps view
+            map_height = st.slider("Map Height", min_value=400, max_value=1000, value=600, step=50)
+            
+            # Create Google Maps HTML
+            google_maps_html = create_google_maps_html(
+                st.session_state.geocoded_places,
+                st.session_state.selected_places,
+                st.session_state.route_data,
+                map_type=google_map_type if 'google_map_type' in locals() else "roadmap",
+                height=map_height
+            )
+            
+            # Display Google Maps
+            st.components.v1.html(google_maps_html, height=map_height + 50)
+            
+            # Add download link for the map
+            st.download_button(
+                label="Download Map as HTML",
+                data=google_maps_html,
+                file_name="google_map.html",
+                mime="text/html"
+            )
     else:
         st.info("Extract places from text to display them on the map.")
 
@@ -332,10 +372,20 @@ def route_planning_section():
                     
                     # Create a new map with the route
                     st.subheader("Route Map")
-                    m = create_folium_map(st.session_state.geocoded_places, 
-                                         st.session_state.selected_places,
-                                         st.session_state.route_data)
-                    folium_static(m)
+                    if st.session_state.map_view == "folium":
+                        # Folium map
+                        m = create_folium_map(st.session_state.geocoded_places, 
+                                            st.session_state.selected_places,
+                                            st.session_state.route_data)
+                        folium_static(m)
+                    else:
+                        # Google Maps
+                        google_maps_html = create_google_maps_html(
+                            st.session_state.geocoded_places,
+                            st.session_state.selected_places,
+                            st.session_state.route_data
+                        )
+                        st.components.v1.html(google_maps_html, height=650)
                 else:
                     st.error("Failed to calculate route. Please try different places or travel mode.")
 

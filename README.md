@@ -14,7 +14,10 @@ A Streamlit application that extracts place names from text and maps them on Goo
   - Uses Google Gemini AI for enhanced place extraction with sentiment analysis
 
 - **Mapping Features:**
-  - Displays all extracted locations on Google Maps
+  - Display extracted locations on maps with two visualization options:
+    - Basic map view with Folium
+    - Full-featured Google Maps with all standard Google Maps annotations
+  - Choose Google Maps type (roadmap, satellite, hybrid, terrain)
   - Save maps for future reference
   - Add new locations to existing maps
   - Calculate optimal routes between selected locations (walking/driving/public transit/bicycling)
@@ -89,7 +92,11 @@ After inputting text:
 
 ### 3. Map View
 
-- All extracted places will be displayed on a Google Map
+- Choose your preferred map type:
+  - **Folium (Basic)**: A simpler, lightweight map
+  - **Google Maps (Full)**: Full Google Maps experience with all standard annotations and features
+- When using Google Maps, you can select the map type: roadmap, satellite, hybrid, or terrain
+- All extracted places will be displayed on the selected map
 - Markers are color-coded by sentiment (green = positive, red = negative, blue = neutral)
 - Click on markers to view place details
 - Add notes and update sentiment for any place
