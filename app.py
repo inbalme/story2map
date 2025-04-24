@@ -1,399 +1,574 @@
-"""
-Story2Map - Streamlit application for extracting place names from text and mapping them.
-"""
-
-import os
-import time
 import streamlit as st
+import os
+import io
+import json
+import tempfile
+import logging
 import pandas as pd
-import numpy as np
 from PIL import Image
-from dotenv import load_dotenv
-from utils.text_extraction import get_clipboard_text, get_text_from_image, get_text_from_url
-from utils.place_extraction import (extract_places_with_spacy, extract_places_with_gemini, 
-                                    combine_place_extractions)
-from utils.map_handler import (geocode_places, create_folium_map, create_google_maps_html, get_route,
-                              save_map_data, load_map_data, get_saved_maps)
+from typing import List, Dict, Any
 from streamlit_folium import folium_static
-import base64
-from io import BytesIO
+from dotenv import load_dotenv
+
+# Import utility modules
+from utils.text_extractor import TextExtractor
+from utils.location_extractor import LocationExtractor
+from utils.map_generator import MapGenerator
 
 # Load environment variables
 load_dotenv()
 
-# Initialize session state variables if they don't exist
-if "places" not in st.session_state:
-    st.session_state.places = []
-if "geocoded_places" not in st.session_state:
-    st.session_state.geocoded_places = []
-if "input_text" not in st.session_state:
-    st.session_state.input_text = ""
-if "route_data" not in st.session_state:
-    st.session_state.route_data = None
-if "selected_places" not in st.session_state:
-    st.session_state.selected_places = []
-if "map_view" not in st.session_state:
-    st.session_state.map_view = "folium"
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("story2map.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-def update_place_note(place_index, note, sentiment):
-    """Update note and sentiment for a place"""
-    if 0 <= place_index < len(st.session_state.geocoded_places):
-        st.session_state.geocoded_places[place_index]["notes"] = note
-        st.session_state.geocoded_places[place_index]["sentiment"] = sentiment
+# Set page config
+st.set_page_config(
+    page_title="Story2Map - Extract Places from Text",
+    page_icon="🗺️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Initialize session state
+if 'locations' not in st.session_state:
+    st.session_state.locations = []
+if 'current_map_name' not in st.session_state:
+    st.session_state.current_map_name = None
+if 'map_generator' not in st.session_state:
+    st.session_state.map_generator = MapGenerator()
+if 'location_extractor' not in st.session_state:
+    st.session_state.location_extractor = LocationExtractor()
+
+def get_unique_tags(locations: List[Dict]) -> List[str]:
+    """Get a unique list of all tags from the locations."""
+    tags = set()
+    for loc in locations:
+        if 'tags' in loc and loc['tags']:
+            for tag in loc['tags']:
+                tags.add(tag.lower())
+    return sorted(list(tags))
+
+def filter_locations_by_tags(locations: List[Dict], selected_tags: List[str]) -> List[Dict]:
+    """Filter locations to only those with at least one of the selected tags."""
+    if not selected_tags:
+        return locations
+        
+    filtered = []
+    for loc in locations:
+        if 'tags' in loc and loc['tags']:
+            if any(tag.lower() in [t.lower() for t in selected_tags] for tag in loc['tags']):
+                filtered.append(loc)
+    return filtered
 
 def main():
-    st.title("Story2Map")
-    st.subheader("Extract Places from Text and Map Them")
+    """Main function to run the Streamlit app."""
     
-    # Create tabs for different sections of the app
-    tab1, tab2, tab3 = st.tabs(["📝 Input Text", "🗺️ Map View", "🔍 Route Planning"])
+    # Title
+    st.title("🗺️ Story2Map")
+    st.markdown("Extract locations from text and visualize them on a map.")
     
-    with tab1:
-        input_text_section()
-    
-    with tab2:
-        map_view_section()
-    
-    with tab3:
-        route_planning_section()
-
-def input_text_section():
-    """Section for text input and place extraction"""
-    # Create tabs for different input methods
-    input_tab1, input_tab2, input_tab3 = st.tabs(["📋 Clipboard", "📷 Screenshot", "🔗 URL"])
-    
-    # Clipboard input
-    with input_tab1:
-        st.subheader("Paste Text from Clipboard")
+    # Sidebar
+    with st.sidebar:
+        st.header("Settings")
         
-        if st.button("Get Text from Clipboard"):
-            with st.spinner("Getting text from clipboard..."):
-                clipboard_text = get_clipboard_text()
-                if clipboard_text:
-                    st.session_state.input_text = clipboard_text
+        # Map type selection
+        map_type = st.radio(
+            "Map Type",
+            ["Folium", "Google Maps"],
+            index=0
+        )
         
-        text_area = st.text_area("Or paste text manually:", 
-                                value=st.session_state.input_text,
-                                height=300)
-        st.session_state.input_text = text_area
-    
-    # Screenshot input
-    with input_tab2:
-        st.subheader("Extract Text from Screenshot")
-        st.write("Copy an image to clipboard and click the button below to extract text from it.")
+        # Google Maps API key input if Google Maps selected
+        google_maps_api_key = None
+        if map_type == "Google Maps":
+            google_maps_api_key = st.text_input(
+                "Google Maps API Key",
+                value=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+                type="password"
+            )
+            if not google_maps_api_key:
+                st.warning("Please enter a Google Maps API key to use Google Maps.")
         
-        if st.button("Extract Text from Clipboard Image"):
-            with st.spinner("Extracting text from image..."):
-                image_text = get_text_from_image()
-                if image_text:
-                    st.session_state.input_text = image_text
-                    st.success("Text extracted successfully!")
-                else:
-                    st.error("Failed to extract text from image. Make sure you have an image copied to clipboard.")
-    
-    # URL input
-    with input_tab3:
-        st.subheader("Extract Text from URL")
-        url = st.text_input("Enter URL:")
+        # Gemini API key input
+        gemini_api_key = st.text_input(
+            "Gemini API Key",
+            value=os.environ.get("GEMINI_API_KEY", ""),
+            type="password",
+            help="Required for extracting locations from text"
+        )
         
-        if st.button("Extract Text from URL"):
-            if url:
-                with st.spinner("Extracting text from URL..."):
-                    url_text = get_text_from_url(url)
-                    if url_text:
-                        st.session_state.input_text = url_text
-                        st.success("Text extracted successfully!")
-                    else:
-                        st.error("Failed to extract text from URL.")
-            else:
-                st.warning("Please enter a URL.")
-    
-    # Display the current text
-    st.subheader("Current Text")
-    if st.session_state.input_text:
-        st.write(f"Text length: {len(st.session_state.input_text)} characters")
-        with st.expander("Show Text"):
-            st.text(st.session_state.input_text)
-    else:
-        st.info("No text has been provided yet.")
-    
-    # Place extraction
-    st.subheader("Extract Places")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        use_spacy = st.checkbox("Use spaCy for basic extraction", value=True)
-    
-    with col2:
-        use_gemini = st.checkbox("Use Google Gemini for enhanced extraction", value=True)
-    
-    if st.button("Extract Places"):
-        if st.session_state.input_text:
-            with st.spinner("Extracting places..."):
-                # Get places using spaCy
-                spacy_places = []
-                if use_spacy:
-                    spacy_places = extract_places_with_spacy(st.session_state.input_text)
-                
-                # Get places using Gemini
-                gemini_places = []
-                if use_gemini:
-                    gemini_places = extract_places_with_gemini(st.session_state.input_text)
-                
-                # Combine results
-                combined_places = combine_place_extractions(spacy_places, gemini_places)
-                
-                # Store in session state
-                st.session_state.places = combined_places
-                
-                # Show results
-                st.success(f"Extracted {len(combined_places)} places.")
-                
-                # Geocode places
-                if combined_places:
-                    st.session_state.geocoded_places = geocode_places(combined_places)
-                    st.success(f"Successfully geocoded {len(st.session_state.geocoded_places)} places.")
-        else:
-            st.warning("Please provide some text first.")
-    
-    # Display extracted places
-    if st.session_state.places:
-        st.subheader("Extracted Places")
+        # Update Gemini API key if changed
+        if gemini_api_key and gemini_api_key != getattr(st.session_state.location_extractor, 'api_key', ''):
+            st.session_state.location_extractor = LocationExtractor(api_key=gemini_api_key)
         
-        # Create a DataFrame for better display
-        places_df = pd.DataFrame([
-            {
-                "Name": p["name"],
-                "Type": p.get("type", "Unknown"),
-                "Sentiment": p.get("sentiment", "neutral").capitalize(),
-                "Mentions": p.get("mentions", 1)
-            }
-            for p in st.session_state.places
-        ])
+        # Update map generator if needed
+        if (map_type == "Google Maps" and google_maps_api_key and 
+            (st.session_state.map_generator.map_type != "google" or 
+             st.session_state.map_generator.google_maps_api_key != google_maps_api_key)):
+            st.session_state.map_generator = MapGenerator(
+                map_type="google", 
+                google_maps_api_key=google_maps_api_key
+            )
+        elif map_type == "Folium" and st.session_state.map_generator.map_type != "folium":
+            st.session_state.map_generator = MapGenerator(map_type="folium")
         
-        st.dataframe(places_df)
-
-def map_view_section():
-    """Section for map visualization and saving/loading maps"""
-    st.subheader("Map View")
-    
-    # Map type selection
-    map_type_col1, map_type_col2 = st.columns([1, 3])
-    with map_type_col1:
-        map_view = st.radio("Map Type:", 
-                          ["Folium (Basic)", "Google Maps (Full)"],
-                          index=0 if st.session_state.map_view == "folium" else 1)
-        st.session_state.map_view = "folium" if map_view == "Folium (Basic)" else "google"
-    
-    with map_type_col2:
-        if st.session_state.map_view == "google":
-            google_map_type = st.radio("Google Maps Type:",
-                                     ["roadmap", "satellite", "hybrid", "terrain"],
-                                     horizontal=True)
-    
-    # Map operations
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Save map
-        if st.session_state.geocoded_places:
-            map_name = st.text_input("Map name:", key="save_map_name")
-            if st.button("Save Map") and map_name:
-                if save_map_data(st.session_state.geocoded_places, map_name):
-                    st.success(f"Map '{map_name}' saved successfully!")
-                else:
-                    st.error("Failed to save map.")
-    
-    with col2:
-        # Load map
-        saved_maps = get_saved_maps()
+        # Saved maps dropdown
+        st.header("Saved Maps")
+        saved_maps = st.session_state.map_generator.get_saved_maps()
+        
         if saved_maps:
-            selected_map = st.selectbox("Select a map to load:", saved_maps)
-            if st.button("Load Map") and selected_map:
-                loaded_places = load_map_data(selected_map)
-                if loaded_places:
-                    st.session_state.geocoded_places = loaded_places
-                    st.success(f"Map '{selected_map}' loaded successfully!")
-                else:
-                    st.error("Failed to load map.")
+            selected_map = st.selectbox(
+                "Load a saved map",
+                [""] + saved_maps,
+                index=0
+            )
+            
+            if selected_map and st.button("Load Selected Map"):
+                locations = st.session_state.map_generator.load_map(selected_map)
+                if locations:
+                    st.session_state.locations = locations
+                    st.session_state.current_map_name = selected_map
+                    st.success(f"Loaded map: {selected_map}")
+                    st.rerun()
         else:
             st.info("No saved maps found.")
     
-    # Place annotations
-    if st.session_state.geocoded_places:
-        st.subheader("Place Annotations")
-        
-        # Create a select box for choosing a place to annotate
-        place_names = [p["name"] for p in st.session_state.geocoded_places]
-        selected_place_index = st.selectbox("Select a place to annotate:", 
-                                           range(len(place_names)), 
-                                           format_func=lambda i: place_names[i])
-        
-        selected_place = st.session_state.geocoded_places[selected_place_index]
-        
-        # Note and sentiment for the selected place
-        note = st.text_area("Notes:", value=selected_place.get("notes", ""))
-        sentiment = st.radio("Sentiment:", 
-                            ["positive", "neutral", "negative"],
-                            index=["positive", "neutral", "negative"].index(selected_place.get("sentiment", "neutral")))
-        
-        if st.button("Update Place Information"):
-            update_place_note(selected_place_index, note, sentiment)
-            st.success("Place information updated!")
-    
-    # Display the map
-    st.subheader("Map")
-    if st.session_state.geocoded_places:
-        if st.session_state.map_view == "folium":
-            # Create and display Folium map
-            m = create_folium_map(st.session_state.geocoded_places, 
-                                 st.session_state.selected_places,
-                                 st.session_state.route_data)
-            folium_static(m)
-            
-            # Add download link for the map
-            st.download_button(
-                label="Download Map as HTML",
-                data=m.get_root().render(),
-                file_name="map.html",
-                mime="text/html"
-            )
-        else:
-            # Google Maps view
-            map_height = st.slider("Map Height", min_value=400, max_value=1000, value=600, step=50)
-            
-            # Create Google Maps HTML
-            google_maps_html = create_google_maps_html(
-                st.session_state.geocoded_places,
-                st.session_state.selected_places,
-                st.session_state.route_data,
-                map_type=google_map_type if 'google_map_type' in locals() else "roadmap",
-                height=map_height
-            )
-            
-            # Display Google Maps
-            st.components.v1.html(google_maps_html, height=map_height + 50)
-            
-            # Add download link for the map
-            st.download_button(
-                label="Download Map as HTML",
-                data=google_maps_html,
-                file_name="google_map.html",
-                mime="text/html"
-            )
-    else:
-        st.info("Extract places from text to display them on the map.")
-
-def route_planning_section():
-    """Section for route planning between selected places"""
-    st.subheader("Route Planning")
-    
-    if not st.session_state.geocoded_places:
-        st.info("Extract places from text to plan routes between them.")
-        return
-    
-    # Place selection for route
-    place_names = [p["name"] for p in st.session_state.geocoded_places]
-    
-    # Origin and destination
-    st.subheader("Select Route Points")
-    
-    col1, col2 = st.columns(2)
+    # Main content area
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        origin_index = st.selectbox("Starting Point:", 
-                                   range(len(place_names)), 
-                                   format_func=lambda i: place_names[i],
-                                   key="origin")
+        st.header("Extract Locations from Text")
+        
+        # Input tabs
+        input_tab = st.tabs(["Clipboard Text", "Upload Image", "URL"])
+        
+        with input_tab[0]:  # Clipboard Text
+            text_input = st.text_area(
+                "Paste text from clipboard",
+                height=300,
+                placeholder="Paste your text here..."
+            )
+            
+            if st.button("Extract from Text"):
+                if not text_input:
+                    st.error("Please paste some text.")
+                elif not gemini_api_key:
+                    st.error("Please enter a Gemini API key in the sidebar.")
+                else:
+                    with st.spinner("Extracting locations from text..."):
+                        extracted_locations = st.session_state.location_extractor.extract_locations(text_input)
+                        
+                        if extracted_locations:
+                            # If we already have a map loaded, ask what to do
+                            if st.session_state.locations and st.session_state.current_map_name:
+                                action = st.radio(
+                                    "What would you like to do with these locations?",
+                                    ["Add to current map", "Create a new map"]
+                                )
+                                
+                                if action == "Add to current map":
+                                    st.session_state.locations.extend(extracted_locations)
+                                    st.success(f"Added {len(extracted_locations)} locations to current map.")
+                                else:
+                                    st.session_state.locations = extracted_locations
+                                    st.session_state.current_map_name = None
+                                    st.success(f"Created new map with {len(extracted_locations)} locations.")
+                            else:
+                                st.session_state.locations = extracted_locations
+                                st.success(f"Extracted {len(extracted_locations)} locations.")
+                            
+                            st.rerun()
+                        else:
+                            st.warning("No locations found in the text.")
+        
+        with input_tab[1]:  # Upload Image
+            uploaded_file = st.file_uploader(
+                "Upload an image",
+                type=["png", "jpg", "jpeg"]
+            )
+            
+            if uploaded_file is not None:
+                image = Image.open(uploaded_file)
+                st.image(image, caption="Uploaded Image", use_column_width=True)
+                
+                if st.button("Extract from Image"):
+                    if not gemini_api_key:
+                        st.error("Please enter a Gemini API key in the sidebar.")
+                    else:
+                        with st.spinner("Extracting text and locations from image..."):
+                            # Extract text from image
+                            text = TextExtractor.from_image(uploaded_file)
+                            
+                            if not text:
+                                st.error("Could not extract text from the image.")
+                            else:
+                                st.write(f"Extracted {len(text)} characters from image")
+                                
+                                # Extract locations from the text
+                                extracted_locations = st.session_state.location_extractor.extract_locations(text)
+                                
+                                if extracted_locations:
+                                    # If we already have a map loaded, ask what to do
+                                    if st.session_state.locations and st.session_state.current_map_name:
+                                        action = st.radio(
+                                            "What would you like to do with these locations?",
+                                            ["Add to current map", "Create a new map"]
+                                        )
+                                        
+                                        if action == "Add to current map":
+                                            st.session_state.locations.extend(extracted_locations)
+                                            st.success(f"Added {len(extracted_locations)} locations to current map.")
+                                        else:
+                                            st.session_state.locations = extracted_locations
+                                            st.session_state.current_map_name = None
+                                            st.success(f"Created new map with {len(extracted_locations)} locations.")
+                                    else:
+                                        st.session_state.locations = extracted_locations
+                                        st.success(f"Extracted {len(extracted_locations)} locations.")
+                                    
+                                    st.rerun()
+                                else:
+                                    st.warning("No locations found in the text extracted from the image.")
+        
+        with input_tab[2]:  # URL
+            url_input = st.text_input(
+                "Enter a URL",
+                placeholder="https://example.com/article"
+            )
+            
+            if st.button("Extract from URL"):
+                if not url_input:
+                    st.error("Please enter a URL.")
+                elif not gemini_api_key:
+                    st.error("Please enter a Gemini API key in the sidebar.")
+                else:
+                    with st.spinner("Extracting text and locations from URL..."):
+                        # Extract text from URL
+                        text = TextExtractor.from_url(url_input)
+                        
+                        if not text:
+                            st.error("Could not extract text from the URL.")
+                        else:
+                            st.write(f"Extracted {len(text)} characters from URL")
+                            
+                            # Extract locations from the text
+                            extracted_locations = st.session_state.location_extractor.extract_locations(text)
+                            
+                            if extracted_locations:
+                                # If we already have a map loaded, ask what to do
+                                if st.session_state.locations and st.session_state.current_map_name:
+                                    action = st.radio(
+                                        "What would you like to do with these locations?",
+                                        ["Add to current map", "Create a new map"]
+                                    )
+                                    
+                                    if action == "Add to current map":
+                                        st.session_state.locations.extend(extracted_locations)
+                                        st.success(f"Added {len(extracted_locations)} locations to current map.")
+                                    else:
+                                        st.session_state.locations = extracted_locations
+                                        st.session_state.current_map_name = None
+                                        st.success(f"Created new map with {len(extracted_locations)} locations.")
+                                else:
+                                    st.session_state.locations = extracted_locations
+                                    st.success(f"Extracted {len(extracted_locations)} locations.")
+                                
+                                st.rerun()
+                            else:
+                                st.warning("No locations found in the text from the URL.")
+        
+        # Display locations in a table if available
+        if st.session_state.locations:
+            st.header(f"Extracted Locations ({len(st.session_state.locations)})")
+            
+            # Create a DataFrame from the locations
+            df = pd.DataFrame([
+                {
+                    "Name": loc.get("name", ""),
+                    "Latitude": loc.get("latitude", ""),
+                    "Longitude": loc.get("longitude", ""),
+                    "Tags": ", ".join(loc.get("tags", [])),
+                    "Description": loc.get("description", "")
+                }
+                for loc in st.session_state.locations
+            ])
+            
+            st.dataframe(df, use_container_width=True)
     
     with col2:
-        destination_index = st.selectbox("Destination:", 
-                                        range(len(place_names)), 
-                                        format_func=lambda i: place_names[i],
-                                        key="destination")
-    
-    # Waypoints (optional)
-    st.subheader("Waypoints (Optional)")
-    
-    # Get all indices except origin and destination
-    available_waypoints = [i for i in range(len(place_names)) 
-                          if i != origin_index and i != destination_index]
-    
-    selected_waypoints = []
-    if available_waypoints:
-        options = [place_names[i] for i in available_waypoints]
-        indices = [i for i in available_waypoints]
-        selected = st.multiselect("Select Waypoints:", options=options)
+        st.header("Map Visualization")
         
-        # Convert selected names to indices
-        selected_waypoints = [indices[options.index(name)] for name in selected if name in options]
-    
-    # Route options
-    st.subheader("Route Options")
-    travel_mode = st.radio("Travel Mode:", 
-                          ["driving", "walking", "transit", "bicycling"],
-                          horizontal=True)
-    
-    # Calculate route
-    if st.button("Calculate Route"):
-        if origin_index == destination_index:
-            st.error("Origin and destination cannot be the same.")
-        else:
-            with st.spinner("Calculating route..."):
-                # Get places for origin, destination, and waypoints
-                origin = st.session_state.geocoded_places[origin_index]
-                destination = st.session_state.geocoded_places[destination_index]
-                
-                waypoints = []
-                if selected_waypoints:
-                    waypoints = [st.session_state.geocoded_places[i] for i in selected_waypoints]
-                
-                # Get route
-                route_data = get_route(origin, destination, waypoints, travel_mode)
-                
-                if route_data:
-                    st.session_state.route_data = route_data
-                    
-                    # Store selected places for highlighting on the map
-                    selected_indices = [origin_index, destination_index] + selected_waypoints
-                    st.session_state.selected_places = [place_names[i] for i in selected_indices]
-                    
-                    # Show route information
-                    st.subheader("Route Information")
-                    st.write(f"**Distance:** {route_data['distance']}")
-                    st.write(f"**Duration:** {route_data['duration']}")
-                    st.write(f"**From:** {route_data['start_address']}")
-                    st.write(f"**To:** {route_data['end_address']}")
-                    
-                    # Show directions
-                    with st.expander("Step-by-Step Directions"):
-                        for i, step in enumerate(route_data['steps']):
-                            st.markdown(f"**Step {i+1}:** {step['instruction']} ({step['distance']}, {step['duration']})")
-                    
-                    # Create a new map with the route
-                    st.subheader("Route Map")
-                    if st.session_state.map_view == "folium":
-                        # Folium map
-                        m = create_folium_map(st.session_state.geocoded_places, 
-                                            st.session_state.selected_places,
-                                            st.session_state.route_data)
-                        folium_static(m)
+        if st.session_state.locations:
+            # Get unique tags for filtering
+            unique_tags = get_unique_tags(st.session_state.locations)
+            
+            # Tag filter if there are tags
+            selected_tags = []
+            if unique_tags:
+                selected_tags = st.multiselect(
+                    "Filter by tags",
+                    unique_tags
+                )
+            
+            # Filter locations by selected tags
+            filtered_locations = filter_locations_by_tags(
+                st.session_state.locations, 
+                selected_tags
+            )
+            
+            # Map save options
+            map_name = st.text_input(
+                "Map Name",
+                value=st.session_state.current_map_name or "",
+                placeholder="Enter a name for your map"
+            )
+            
+            save_col, view_col = st.columns(2)
+            
+            with save_col:
+                if st.button("Save Map"):
+                    if not map_name:
+                        st.error("Please enter a map name.")
                     else:
-                        # Google Maps
-                        google_maps_html = create_google_maps_html(
-                            st.session_state.geocoded_places,
-                            st.session_state.selected_places,
-                            st.session_state.route_data
-                        )
-                        st.components.v1.html(google_maps_html, height=650)
+                        with st.spinner("Saving map..."):
+                            path = st.session_state.map_generator.create_map(
+                                filtered_locations, 
+                                map_name
+                            )
+                            
+                            if path:
+                                st.session_state.current_map_name = map_name
+                                st.success(f"Map saved as {map_name}")
+                                
+                                # If Google Maps, display shareable link
+                                if st.session_state.map_generator.map_type == "google":
+                                    shareable_url = st.session_state.map_generator.get_shareable_url(map_name)
+                                    if shareable_url:
+                                        st.markdown(f"[Open in Google Maps]({shareable_url})")
+                            else:
+                                st.error("Failed to save map.")
+            
+            with view_col:
+                if st.button("View Map"):
+                    if not map_name and not st.session_state.current_map_name:
+                        st.error("Please save the map first.")
+                    else:
+                        map_to_view = map_name or st.session_state.current_map_name
+                        path = st.session_state.map_generator.get_map_path(map_to_view)
+                        
+                        if path:
+                            if st.session_state.map_generator.map_type == "folium":
+                                with open(path, 'r') as f:
+                                    map_html = f.read()
+                                st.components.v1.html(map_html, height=500)
+                            else:
+                                with open(path, 'r') as f:
+                                    map_html = f.read()
+                                st.components.v1.html(map_html, height=500)
+                                
+                                # Display shareable link
+                                shareable_url = st.session_state.map_generator.get_shareable_url(map_to_view)
+                                if shareable_url:
+                                    st.markdown(f"[Open in Google Maps]({shareable_url})")
+                        else:
+                            st.error(f"Map file not found for {map_to_view}")
+            
+            # Always display the current map 
+            if filtered_locations:
+                if st.session_state.map_generator.map_type == "folium":
+                    # Create a folium map for display
+                    import folium
+                    from folium.plugins import MarkerCluster
+                    
+                    # Calculate center of map
+                    lats = [loc.get('latitude', 0) for loc in filtered_locations if loc.get('latitude')]
+                    lngs = [loc.get('longitude', 0) for loc in filtered_locations if loc.get('longitude')]
+                    
+                    if lats and lngs:
+                        center = [sum(lats) / len(lats), sum(lngs) / len(lngs)]
+                        
+                        # Determine zoom level based on the spread of locations
+                        lat_range = max(lats) - min(lats)
+                        lng_range = max(lngs) - min(lngs)
+                        max_range = max(lat_range, lng_range)
+                        
+                        if max_range > 20:
+                            zoom = 4
+                        elif max_range > 10:
+                            zoom = 6
+                        elif max_range > 5:
+                            zoom = 8
+                        elif max_range > 1:
+                            zoom = 10
+                        else:
+                            zoom = 12
+                    else:
+                        center = [0, 0]
+                        zoom = 2
+                    
+                    m = folium.Map(location=center, zoom_start=zoom)
+                    
+                    # Add marker cluster
+                    marker_cluster = MarkerCluster().add_to(m)
+                    
+                    # Color map for different tags
+                    tag_colors = st.session_state.map_generator.tag_colors
+                    
+                    # Add markers for each location
+                    for loc in filtered_locations:
+                        if 'latitude' in loc and 'longitude' in loc:
+                            # Get color based on first tag
+                            color = "blue"  # Default color
+                            if 'tags' in loc and loc['tags']:
+                                primary_tag = loc['tags'][0].lower()
+                                color = tag_colors.get(primary_tag, "blue")
+                            
+                            # Create popup with location info
+                            popup_html = f"<b>{loc['name']}</b><br>"
+                            
+                            if 'description' in loc and loc['description']:
+                                popup_html += f"{loc['description']}<br>"
+                            
+                            if 'tags' in loc and loc['tags']:
+                                popup_html += f"Tags: {', '.join(loc['tags'])}<br>"
+                            
+                            # Add marker to cluster
+                            folium.Marker(
+                                location=[loc['latitude'], loc['longitude']],
+                                popup=folium.Popup(popup_html, max_width=300),
+                                icon=folium.Icon(color=color, icon="info-sign"),
+                            ).add_to(marker_cluster)
+                    
+                    # Display the folium map
+                    folium_static(m, width=700, height=500)
                 else:
-                    st.error("Failed to calculate route. Please try different places or travel mode.")
+                    # Create a temporary HTML file for Google Maps
+                    if google_maps_api_key:
+                        with tempfile.NamedTemporaryFile(suffix='.html', delete=False, mode='w') as f:
+                            html_content = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <title>Map Preview</title>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <style>
+                                    #map {{
+                                        height: 100%;
+                                        width: 100%;
+                                        position: absolute;
+                                        top: 0;
+                                        left: 0;
+                                    }}
+                                    html, body {{
+                                        height: 100%;
+                                        margin: 0;
+                                        padding: 0;
+                                    }}
+                                </style>
+                            </head>
+                            <body>
+                                <div id="map"></div>
+                                <script>
+                                    function initMap() {{
+                                        const locations = {json.dumps(filtered_locations)};
+                                        
+                                        // Default center if no locations
+                                        let center = {{ lat: 0, lng: 0 }};
+                                        let zoom = 2;
+                                        
+                                        if (locations.length > 0) {{
+                                            // Calculate center
+                                            const lats = locations.map(loc => loc.latitude).filter(Boolean);
+                                            const lngs = locations.map(loc => loc.longitude).filter(Boolean);
+                                            
+                                            if (lats.length > 0 && lngs.length > 0) {{
+                                                const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+                                                const avgLng = lngs.reduce((a, b) => a + b, 0) / lngs.length;
+                                                center = {{ lat: avgLat, lng: avgLng }};
+                                                
+                                                // Determine zoom level
+                                                const latRange = Math.max(...lats) - Math.min(...lats);
+                                                const lngRange = Math.max(...lngs) - Math.min(...lngs);
+                                                const maxRange = Math.max(latRange, lngRange);
+                                                
+                                                if (maxRange > 20) zoom = 4;
+                                                else if (maxRange > 10) zoom = 6;
+                                                else if (maxRange > 5) zoom = 8;
+                                                else if (maxRange > 1) zoom = 10;
+                                                else zoom = 12;
+                                            }}
+                                        }}
+                                        
+                                        const map = new google.maps.Map(document.getElementById("map"), {{
+                                            zoom: zoom,
+                                            center: center,
+                                        }});
+                                        
+                                        // Add markers
+                                        locations.forEach(loc => {{
+                                            if (loc.latitude && loc.longitude) {{
+                                                const marker = new google.maps.Marker({{
+                                                    position: {{ lat: loc.latitude, lng: loc.longitude }},
+                                                    map: map,
+                                                    title: loc.name
+                                                }});
+                                                
+                                                // Create info window
+                                                let content = `<div><h3>${{loc.name}}</h3>`;
+                                                if (loc.description) content += `<p>${{loc.description}}</p>`;
+                                                if (loc.tags && loc.tags.length) content += `<p>Tags: ${{loc.tags.join(', ')}}</p>`;
+                                                content += `</div>`;
+                                                
+                                                const infowindow = new google.maps.InfoWindow({{
+                                                    content: content
+                                                }});
+                                                
+                                                marker.addListener("click", () => {{
+                                                    infowindow.open({{
+                                                        anchor: marker,
+                                                        map,
+                                                    }});
+                                                }});
+                                            }}
+                                        }});
+                                    }}
+                                </script>
+                                <script src="https://maps.googleapis.com/maps/api/js?key={google_maps_api_key}&callback=initMap" async defer></script>
+                            </body>
+                            </html>
+                            """
+                            f.write(html_content)
+                            temp_file = f.name
+                        
+                        # Display the temporary Google Maps HTML
+                        with open(temp_file, 'r') as f:
+                            map_html = f.read()
+                        st.components.v1.html(map_html, height=500)
+                        
+                        # Remove the temp file
+                        os.unlink(temp_file)
+                    else:
+                        st.warning("Please enter a Google Maps API key in the sidebar to view the map.")
+            else:
+                st.info("No locations to display. Extract locations from text or load a saved map.")
+        else:
+            st.info("No locations to display. Extract locations from text or load a saved map.")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "Story2Map - Extract and visualize locations from text. "
+        "Made with ❤️ using Streamlit, Folium, and Google Generative AI."
+    )
 
 if __name__ == "__main__":
-    st.set_page_config(
-        page_title="Story2Map",
-        page_icon="🗺️",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
     main() 

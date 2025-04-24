@@ -1,163 +1,101 @@
 # Story2Map
 
-A Streamlit application that extracts place names from text and maps them on Google Maps. This tool is perfect for travel planning, research, and visualizing location-based information from textual content.
+Story2Map is a Streamlit application that extracts location names from text and visualizes them on interactive maps. The application leverages Gemini AI to identify place names and their relevant context, then displays them on either a Folium map (default) or a Google Map.
 
 ## Features
 
-- **Multiple Text Input Methods:**
-  - Copy/paste from clipboard
-  - Extract text from clipboard screenshots using OCR
-  - Extract text from URLs (web scraping)
+- **Multiple Input Methods**: Extract text from clipboard, uploaded images (via OCR), or web URLs
+- **AI-Powered Location Extraction**: Uses Google's Gemini LLM to identify locations and their context
+- **Two Map Types**: Choose between Folium maps (default) or Google Maps (with API key)
+- **Location Tagging**: Automatically tags locations by type (restaurant, landmark, etc.)
+- **Tag Filtering**: Filter map markers by tags to focus on specific location types
+- **Save & Load Maps**: Save your maps and load them later to continue your work
+- **Google Maps Integration**: Create shareable Google Maps links to open on mobile devices
 
-- **Location Extraction:**
-  - Uses spaCy NER for basic place extraction
-  - Uses Google Gemini AI for enhanced place extraction with sentiment analysis
+## Installation
 
-- **Mapping Features:**
-  - Display extracted locations on maps with two visualization options:
-    - Basic map view with Folium
-    - Full-featured Google Maps with all standard Google Maps annotations
-  - Choose Google Maps type (roadmap, satellite, hybrid, terrain)
-  - Save maps for future reference
-  - Add new locations to existing maps
-  - Calculate optimal routes between selected locations (walking/driving/public transit/bicycling)
-  - Add notes to locations with sentiment indicators (positive/negative/neutral)
-  - Download maps as HTML files for offline viewing
+### Requirements
 
-## Setup
-
-### Prerequisites
-
-- Python 3.8+
-- Google Maps API key
-- Google Gemini API key
+- Python 3.9+
 - Tesseract OCR (for image text extraction)
+- Google Gemini API key
+- Google Maps API key (optional, for Google Maps visualization)
 
-### Installation
+### Using pip
 
-#### Option 1: Using pip (standard)
+```bash
+git clone https://github.com/yourusername/story2map.git
+cd story2map
+pip install -r requirements.txt
+```
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/story2map.git
-   cd story2map
-   ```
+### Using conda
 
-2. Run the setup script to install dependencies and set up the environment:
-   ```
-   python setup.py
-   ```
+```bash
+git clone https://github.com/yourusername/story2map.git
+cd story2map
+conda env create -f environment.yml
+conda activate story2map
+```
 
-3. Set up API keys:
-   - Create a `.env` file in the root directory based on the `.env.template` file
-   - Add your Google Maps API key and Google Gemini API key
+## API Keys Setup
 
-   ```
-   GOOGLE_MAPS_API_KEY=your_google_maps_api_key
-   GOOGLE_GEMINI_API_KEY=your_google_gemini_api_key
-   ```
+Story2Map requires a Google Gemini API key for location extraction. For Google Maps visualization, a Google Maps API key is also required.
 
-4. Install Tesseract OCR:
-   - On macOS: `brew install tesseract`
-   - On Windows: Download and install from [GitHub](https://github.com/UB-Mannheim/tesseract/wiki)
-   - On Linux: `sudo apt-get install tesseract-ocr`
-
-#### Option 2: Using Conda (recommended)
-
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/story2map.git
-   cd story2map
-   ```
-
-2. Run the conda setup script to create and configure the environment:
-   - On macOS/Linux:
-     ```
-     ./setup_conda.sh
-     ```
-   - On Windows:
-     ```
-     setup_conda.bat
-     ```
-
-3. Activate the conda environment:
-   ```
-   conda activate story2map
-   ```
-
-4. Set up API keys:
-   - Create a `.env` file in the root directory based on the `.env.template` file
-   - Add your Google Maps API key and Google Gemini API key
-
-5. Install Tesseract OCR as instructed by the setup script
-
-## Running the Application
-
-Start the Streamlit app:
+You can provide these keys in two ways:
+1. Enter them directly in the app's sidebar
+2. Create a `.env` file in the project root with the following content:
 
 ```
+GEMINI_API_KEY=your_gemini_api_key_here
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
+```
+
+## Usage
+
+1. Start the application:
+
+```bash
 streamlit run app.py
 ```
 
-This will open the application in your default web browser.
+2. The app will open in your browser at http://localhost:8501
 
-## Usage Guide
+3. Enter your API key(s) in the sidebar if not provided via .env file
 
-### 1. Input Text
+4. Choose one of the input methods:
+   - Paste text from clipboard
+   - Upload an image containing text
+   - Enter a URL to extract text from a webpage
 
-The application offers three ways to input text:
+5. The app will extract locations and display them on a map with appropriate tags
 
-- **Clipboard**: Copy text from anywhere and paste it directly or use the "Get Text from Clipboard" button
-- **Screenshot**: Copy an image containing text to your clipboard and let the app extract text using OCR
-- **URL**: Enter a webpage URL and the app will scrape and extract the text content
+6. You can filter locations by tags, save the map, and create shareable links
 
-### 2. Extract Places
+## Data Storage
 
-After inputting text:
+Maps and location data are stored in the `data` directory in the following formats:
+- Location data: JSON files (`mapname.json`)
+- Folium maps: HTML files (`mapname.html`)
+- Google Maps: HTML files (`mapname_google.html`)
+- Shareable URLs: Text files (`mapname_url.txt`)
 
-1. Choose extraction method(s):
-   - spaCy for basic extraction
-   - Google Gemini for enhanced extraction with sentiment
-2. Click "Extract Places" button
-3. View the list of extracted places
+## Example
 
-### 3. Map View
-
-- Choose your preferred map type:
-  - **Folium (Basic)**: A simpler, lightweight map
-  - **Google Maps (Full)**: Full Google Maps experience with all standard annotations and features
-- When using Google Maps, you can select the map type: roadmap, satellite, hybrid, or terrain
-- All extracted places will be displayed on the selected map
-- Markers are color-coded by sentiment (green = positive, red = negative, blue = neutral)
-- Click on markers to view place details
-- Add notes and update sentiment for any place
-- Save maps for future reference
-- Load previously saved maps
-
-### 4. Route Planning
-
-1. Select a starting point and destination from extracted places
-2. Optionally add waypoints
-3. Choose a travel mode (driving, walking, transit, bicycling)
-4. Click "Calculate Route" to see:
-   - Route displayed on the map
-   - Distance and duration information
-   - Step-by-step directions
-
-## Troubleshooting
-
-- **API Key Issues**: Ensure your API keys are correctly entered in the `.env` file
-- **OCR Problems**: Make sure Tesseract OCR is properly installed on your system
-- **Geocoding Failures**: Some place names may be ambiguous or not found by Google Maps
+1. Paste a travel blog post or article into the text input
+2. Click "Extract from Text"
+3. The app will identify all locations mentioned along with their context
+4. Enter a name for your map and click "Save Map"
+5. Use the tag filters to focus on specific location types (restaurants, landmarks, etc.)
+6. If using Google Maps, get a shareable link to open on your mobile device
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgements
+## Acknowledgments
 
-- [Streamlit](https://streamlit.io/) for the web app framework
-- [spaCy](https://spacy.io/) for NLP and entity recognition
-- [Google Maps Platform](https://developers.google.com/maps) for geocoding and mapping
-- [Google Gemini API](https://ai.google.dev/gemini-api) for enhanced place extraction
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) for image text extraction 
+- Streamlit for the web framework
+- Folium for map visualization
+- Google Gemini for location extraction
+- Tesseract OCR for image text extraction 
