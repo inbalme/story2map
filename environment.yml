@@ -1,0 +1,9 @@
+name: story2map
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11.8
+  - pip=23.0
+  - pip:
+    - -r requirements.txt 

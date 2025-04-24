@@ -170,12 +170,17 @@ def create_folium_map(places: List[Dict[str, Any]],
     # Add route polyline if route_data is provided
     if route_data and route_data.get("polyline"):
         points = polyline.decode(route_data["polyline"])
+        # Extract route information outside the f-string
+        route_distance = route_data.get('distance', 'Unknown')
+        route_duration = route_data.get('duration', 'Unknown')
+        tooltip_text = f"{route_distance} - {route_duration}"
+        
         folium.PolyLine(
             points,
             weight=5,
             color="blue",
             opacity=0.7,
-            tooltip=f"{route_data.get('distance', 'Unknown')} - {route_data.get('duration', 'Unknown')}"
+            tooltip=tooltip_text
         ).add_to(m)
     
     return m
@@ -271,10 +276,15 @@ def create_google_maps_html(places: List[Dict[str, Any]],
         
         # Create popup content
         notes = place.get("notes", "").replace("'", "\\'").replace("\n", "<br>")
+        # Prepare address with proper escaping 
+        escaped_address = place.get('formatted_address', '').replace("'", '"')
+        # Prepare place name with proper escaping for JavaScript
+        escaped_name = place['name'].replace("'", "\\'")
+        
         popup_content = f"""
         <div class="info-window">
             <h3>{place['name']}</h3>
-            <p>{place.get('formatted_address', '').replace("'", "\\'")}</p>
+            <p>{escaped_address}</p>
             <p><strong>Type:</strong> {place.get('type', 'Unknown')}</p>
             <p><strong>Sentiment:</strong> {sentiment.capitalize()}</p>
         """
@@ -290,7 +300,7 @@ def create_google_maps_html(places: List[Dict[str, Any]],
                 const marker{i} = new google.maps.Marker({{
                     position: {{ lat: {place['lat']}, lng: {place['lng']} }},
                     map: map,
-                    title: '{place['name'].replace("'", "\\'")}',
+                    title: '{escaped_name}',
                     icon: '{icon_url}',
                     animation: {f'google.maps.Animation.BOUNCE' if is_selected else 'null'}
                 }});
@@ -318,6 +328,10 @@ def create_google_maps_html(places: List[Dict[str, Any]],
         for point in points:
             html += f"{{ lat: {point[0]}, lng: {point[1]} }},"
             
+        # For route window content, prepare strings outside the f-string
+        distance_text = route_data.get('distance', 'Unknown')
+        duration_text = route_data.get('duration', 'Unknown')
+        
         html += f"""
                     ],
                     geodesic: true,
@@ -330,7 +344,7 @@ def create_google_maps_html(places: List[Dict[str, Any]],
                 
                 // Add route info window
                 const routeInfoWindow = new google.maps.InfoWindow({{
-                    content: '<div><strong>Distance:</strong> {route_data.get('distance', 'Unknown')}<br><strong>Duration:</strong> {route_data.get('duration', 'Unknown')}</div>'
+                    content: '<div><strong>Distance:</strong> {distance_text}<br><strong>Duration:</strong> {duration_text}</div>'
                 }});
                 
                 // Add click listener to the route

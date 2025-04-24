@@ -35,6 +35,8 @@ A Streamlit application that extracts place names from text and maps them on Goo
 
 ### Installation
 
+#### Option 1: Using pip (standard)
+
 1. Clone this repository:
    ```
    git clone https://github.com/yourusername/story2map.git
@@ -59,6 +61,35 @@ A Streamlit application that extracts place names from text and maps them on Goo
    - On macOS: `brew install tesseract`
    - On Windows: Download and install from [GitHub](https://github.com/UB-Mannheim/tesseract/wiki)
    - On Linux: `sudo apt-get install tesseract-ocr`
+
+#### Option 2: Using Conda (recommended)
+
+1. Clone this repository:
+   ```
+   git clone https://github.com/yourusername/story2map.git
+   cd story2map
+   ```
+
+2. Run the conda setup script to create and configure the environment:
+   - On macOS/Linux:
+     ```
+     ./setup_conda.sh
+     ```
+   - On Windows:
+     ```
+     setup_conda.bat
+     ```
+
+3. Activate the conda environment:
+   ```
+   conda activate story2map
+   ```
+
+4. Set up API keys:
+   - Create a `.env` file in the root directory based on the `.env.template` file
+   - Add your Google Maps API key and Google Gemini API key
+
+5. Install Tesseract OCR as instructed by the setup script
 
 ## Running the Application
 
