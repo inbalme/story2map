@@ -356,31 +356,6 @@ def main():
                             else:
                                 st.error("Failed to save map.")
             
-            with view_col:
-                if st.button("View Map"):
-                    if not map_name and not st.session_state.current_map_name:
-                        st.error("Please save the map first.")
-                    else:
-                        map_to_view = map_name or st.session_state.current_map_name
-                        path = st.session_state.map_generator.get_map_path(map_to_view)
-                        
-                        if path:
-                            if st.session_state.map_generator.map_type == "folium":
-                                with open(path, 'r') as f:
-                                    map_html = f.read()
-                                st.components.v1.html(map_html, height=500)
-                            else:
-                                with open(path, 'r') as f:
-                                    map_html = f.read()
-                                st.components.v1.html(map_html, height=500)
-                                
-                                # Display shareable link
-                                shareable_url = st.session_state.map_generator.get_shareable_url(map_to_view)
-                                if shareable_url:
-                                    st.markdown(f"[Open in Google Maps]({shareable_url})")
-                        else:
-                            st.error(f"Map file not found for {map_to_view}")
-            
             # Always display the current map 
             if filtered_locations:
                 if st.session_state.map_generator.map_type == "folium":
@@ -567,7 +542,6 @@ def main():
     st.markdown("---")
     st.markdown(
         "Story2Map - Extract and visualize locations from text. "
-        "Made with ❤️ using Streamlit, Folium, and Google Generative AI."
     )
 
 if __name__ == "__main__":
