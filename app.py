@@ -331,30 +331,27 @@ def main():
                 placeholder="Enter a name for your map"
             )
             
-            save_col, view_col = st.columns(2)
-            
-            with save_col:
-                if st.button("Save Map"):
-                    if not map_name:
-                        st.error("Please enter a map name.")
-                    else:
-                        with st.spinner("Saving map..."):
-                            path = st.session_state.map_generator.create_map(
-                                filtered_locations, 
-                                map_name
-                            )
+            if st.button("Save Map"):
+                if not map_name:
+                    st.error("Please enter a map name.")
+                else:
+                    with st.spinner("Saving map..."):
+                        path = st.session_state.map_generator.create_map(
+                            filtered_locations, 
+                            map_name
+                        )
+                        
+                        if path:
+                            st.session_state.current_map_name = map_name
+                            st.success(f"Map saved as {map_name}")
                             
-                            if path:
-                                st.session_state.current_map_name = map_name
-                                st.success(f"Map saved as {map_name}")
-                                
-                                # If Google Maps, display shareable link
-                                if st.session_state.map_generator.map_type == "google":
-                                    shareable_url = st.session_state.map_generator.get_shareable_url(map_name)
-                                    if shareable_url:
-                                        st.markdown(f"[Open in Google Maps]({shareable_url})")
-                            else:
-                                st.error("Failed to save map.")
+                            # If Google Maps, display shareable link
+                            if st.session_state.map_generator.map_type == "google":
+                                shareable_url = st.session_state.map_generator.get_shareable_url(map_name)
+                                if shareable_url:
+                                    st.markdown(f"[Open in Google Maps]({shareable_url})")
+                        else:
+                            st.error("Failed to save map.")
             
             # Always display the current map 
             if filtered_locations:
