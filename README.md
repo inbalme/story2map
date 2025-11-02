@@ -1,8 +1,8 @@
-![Example Image](story2map_screenshot.png)
-
 # Story2Map
 
 Story2Map is a Streamlit application that extracts location names from text and visualizes them on interactive maps. The application leverages Gemini AI to identify place names and their relevant context, then displays them on either a Folium map (default) or a Google Map.
+
+![Example Image](story2map_screenshot.png)
 
 ## Features
 
