@@ -93,9 +93,4 @@ Maps and location data are stored in the `data` directory in the following forma
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
-
-- Streamlit for the web framework
-- Folium for map visualization
-- Google Gemini for location extraction
-- Tesseract OCR for image text extraction 
+![Example Image](story2map_screenshot.png)
